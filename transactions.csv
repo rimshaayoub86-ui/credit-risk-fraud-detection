@@ -1,0 +1,137 @@
+"""
+Phase 1: Data Understanding / Generation
+---------------------------------------
+Financial institutions rarely share real data publicly (privacy + regulation),
+so this script GENERATES realistic synthetic datasets:
+    1. credit_data.csv      -> for Credit Risk Assessment (loan default prediction)
+    2. transactions.csv     -> for Fraud Detection (imbalanced, ~1.5% fraud)
+
+Replace these with real datasets (e.g. Kaggle "Give Me Some Credit",
+"Credit Card Fraud Detection" dataset) any time -- the rest of the
+pipeline (src/*.py) does not care where the data came from, as long as
+the column names match.
+"""
+
+import numpy as np
+import pandas as pd
+from pathlib import Path
+
+RANDOM_SEED = 42
+np.random.seed(RANDOM_SEED)
+
+OUT_DIR = Path(__file__).parent
+
+
+def generate_credit_data(n=8000):
+    """Simulate a loan-applicant credit dataset."""
+    age = np.random.randint(21, 70, n)
+    income = np.random.lognormal(mean=10.5, sigma=0.5, size=n).round(2)
+    employment_years = np.clip(np.random.exponential(5, n), 0, 40).round(1)
+    num_accounts = np.random.poisson(4, n)
+    credit_age_years = np.clip(np.random.exponential(7, n), 0, 35).round(1)
+    existing_debt = np.random.lognormal(mean=8.5, sigma=1.0, size=n).round(2)
+    loan_amount = np.random.lognormal(mean=9.2, sigma=0.6, size=n).round(2)
+    credit_utilization = np.clip(np.random.beta(2, 5, n), 0, 1).round(3)
+    late_payments_12m = np.random.poisson(0.6, n)
+    debt_to_income = (existing_debt / (income + 1)).round(3)
+
+    # Latent "risk score" combining features (drives probability of default)
+    risk_score = (
+        -0.03 * (income / 1000)
+        + 0.35 * debt_to_income
+        + 0.9 * credit_utilization
+        + 0.25 * late_payments_12m
+        - 0.05 * credit_age_years
+        - 0.02 * employment_years
+        + np.random.normal(0, 0.5, n)
+    )
+    prob_default = 1 / (1 + np.exp(-risk_score))
+    default = (np.random.rand(n) < prob_default).astype(int)
+
+    df = pd.DataFrame({
+        "applicant_id": range(1, n + 1),
+        "age": age,
+        "annual_income": income,
+        "employment_years": employment_years,
+        "num_accounts": num_accounts,
+        "credit_age_years": credit_age_years,
+        "existing_debt": existing_debt,
+        "loan_amount": loan_amount,
+        "credit_utilization": credit_utilization,
+        "late_payments_12m": late_payments_12m,
+        "debt_to_income": debt_to_income,
+        "default": default,  # target: 1 = defaulted, 0 = paid back
+    })
+
+    # Inject a few missing values (realistic dirty data)
+    for col in ["annual_income", "employment_years", "credit_age_years"]:
+        idx = np.random.choice(n, size=int(0.02 * n), replace=False)
+        df.loc[idx, col] = np.nan
+
+    return df
+
+
+def generate_transaction_data(n=50000, fraud_rate=0.015):
+    """Simulate card-transaction data for fraud detection (imbalanced)."""
+    n_fraud = int(n * fraud_rate)
+    n_legit = n - n_fraud
+
+    def base_block(size, fraud_flag):
+        amount = (
+            np.random.exponential(300, size) if fraud_flag
+            else np.random.exponential(60, size)
+        ).round(2)
+        hour = (
+            np.random.choice(range(24), size, p=_night_heavy_probs())
+            if fraud_flag else np.random.randint(0, 24, size)
+        )
+        merchant_category = np.random.choice(
+            ["grocery", "electronics", "travel", "online", "fuel", "atm", "jewelry"],
+            size=size,
+            p=[0.25, 0.15, 0.1, 0.25, 0.15, 0.05, 0.05] if not fraud_flag
+            else [0.05, 0.25, 0.15, 0.30, 0.05, 0.10, 0.10],
+        )
+        distance_from_home_km = (
+            np.random.exponential(400, size) if fraud_flag
+            else np.random.exponential(15, size)
+        ).round(1)
+        txn_velocity_1h = (
+            np.random.poisson(5, size) if fraud_flag else np.random.poisson(0.5, size)
+        )
+        is_foreign = np.random.rand(size) < (0.5 if fraud_flag else 0.03)
+        return amount, hour, merchant_category, distance_from_home_km, txn_velocity_1h, is_foreign
+
+    def _night_heavy_probs():
+        p = np.ones(24)
+        p[0:6] *= 3  # fraud favors late-night hours
+        return p / p.sum()
+
+    rows = []
+    for flag, size in [(0, n_legit), (1, n_fraud)]:
+        amount, hour, mcc, dist, vel, foreign = base_block(size, flag)
+        block = pd.DataFrame({
+            "amount": amount,
+            "hour_of_day": hour,
+            "merchant_category": mcc,
+            "distance_from_home_km": dist,
+            "txn_velocity_1h": vel,
+            "is_foreign": foreign.astype(int),
+            "is_fraud": flag,
+        })
+        rows.append(block)
+
+    df = pd.concat(rows, ignore_index=True)
+    df = df.sample(frac=1, random_state=RANDOM_SEED).reset_index(drop=True)
+    df.insert(0, "transaction_id", range(1, len(df) + 1))
+    return df
+
+
+if __name__ == "__main__":
+    credit_df = generate_credit_data()
+    txn_df = generate_transaction_data()
+
+    credit_df.to_csv(OUT_DIR / "credit_data.csv", index=False)
+    txn_df.to_csv(OUT_DIR / "transactions.csv", index=False)
+
+    print(f"credit_data.csv     -> {credit_df.shape}  (default rate: {credit_df['default'].mean():.2%})")
+    print(f"transactions.csv    -> {txn_df.shape}  (fraud rate: {txn_df['is_fraud'].mean():.2%})")

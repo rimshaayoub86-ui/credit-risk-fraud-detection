@@ -1,0 +1,12 @@
+feature,importance
+anomaly_score,0.91260844
+txn_velocity_1h,0.03682513
+distance_from_home_km,0.014807752
+far_from_home,0.010854263
+amount,0.009765231
+is_foreign,0.008367247
+is_night_txn,0.0033499259
+merchant_category,0.0012144416
+amount_zscore_by_category,0.0009839194
+hour_of_day,0.00095387665
+high_velocity,0.0002697826
